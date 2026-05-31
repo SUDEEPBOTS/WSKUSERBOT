@@ -1,1 +1,14 @@
+#!/bin/bash
 
+# Start keep-alive server in background
+python WSKUSERBOT/sraver.py &
+SRAVER_PID=$!
+echo "[start] sraver started (PID: $SRAVER_PID)"
+
+while true; do
+    echo "[start] Starting WSKUSERBOT..."
+    python -m WSKUSERBOT
+    EXIT_CODE=$?
+    echo "[start] Exited with code $EXIT_CODE, restarting in 5s..."
+    sleep 5
+done
