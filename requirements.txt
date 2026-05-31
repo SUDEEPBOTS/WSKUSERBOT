@@ -1,1 +1,11 @@
-
+pyrofork
+tgcrypto
+motor
+pymongo
+aiohttp
+asyncio
+python-dotenv
+colorlog
+colorama
+requests
+ujson
