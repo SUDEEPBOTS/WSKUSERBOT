@@ -1,52 +1,212 @@
+"""
+solver.py — 𝐖ᴏʀᴅ𝐒ᴇᴇᴋ Smart Solver
+Entropy-based algorithm: picks guess that splits remaining
+candidates most evenly → wins in fewest attempts.
+"""
+
 import json
 import os
-import re
-from collections import Counter
-from typing import List, Optional, Tuple
+import math
+from typing import List, Tuple, Dict, Optional
 
 BASE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Words")
-WORD_CACHE = {}
 
-VOWELS = set("aeiou")
-VOWEL_WEIGHT = 1.8
-POSITION_WEIGHT = 0.6
-UNIQUE_BONUS = 10
-DUPLICATE_PENALTY = 50
+# ── Best opening words (pre-researched, high letter coverage) ──
+STARTERS: Dict[int, str] = {
+    4: "rate",    # R, A, T, E — 4 very common letters
+    5: "slate",   # S, L, A, T, E — top 5-letter opener
+    6: "clears",  # C, L, E, A, R, S — covers 6 common letters
+}
+
+# ── Second guess if starter gives little info ──
+SECOND: Dict[int, str] = {
+    4: "noun",
+    5: "crony",
+    6: "bounty",
+}
 
 
-def load_words(mode: int) -> List[str]:
-    if mode in WORD_CACHE:
-        return WORD_CACHE[mode][:]
+# ═══════════════════════════════════════════════
+#  Word Loading
+# ═══════════════════════════════════════════════
+
+def load_words(mode: int) -> Tuple[List[str], List[str]]:
+    """
+    Returns (common_words, all_words) for the given letter count.
+    common_words = likely answers
+    all_words    = valid guesses (much larger list)
+    """
     size = {4: "four", 5: "five", 6: "six"}.get(mode, "five")
-    common_path = os.path.join(BASE, f"common-{size}.json")
-    all_path = os.path.join(BASE, f"all-{size}.json")
-    with open(common_path) as f:
+    with open(os.path.join(BASE, f"common-{size}.json")) as f:
         common = json.load(f)
-    with open(all_path) as f:
-        all_words = json.load(f)
-    seen = set(common)
-    rest = [w for w in all_words if w not in seen]
-    result = common + rest
-    WORD_CACHE[mode] = result
-    return result[:]
+    with open(os.path.join(BASE, f"all-{size}.json")) as f:
+        all_w = json.load(f)
+    return common, all_w
 
 
-def get_word_stats():
-    sizes = {4: "four", 5: "five", 6: "six"}
-    result = {}
-    for mode, size in sizes.items():
-        common_path = os.path.join(BASE, f"common-{size}.json")
-        all_path = os.path.join(BASE, f"all-{size}.json")
-        with open(common_path) as f:
-            common = len(json.load(f))
-        with open(all_path) as f:
-            all_words = len(json.load(f))
-        result[mode] = {"common": common, "all": all_words}
-    return result
+def load_candidates(mode: int) -> List[str]:
+    """Returns just the common (likely answer) word list."""
+    common, _ = load_words(mode)
+    return common
 
+
+# ═══════════════════════════════════════════════
+#  Pattern Engine  (handles duplicate letters correctly)
+# ═══════════════════════════════════════════════
+
+def get_pattern(guess: str, answer: str) -> Tuple[str, ...]:
+    """
+    Simulate what pattern WordSeek would show for guess vs answer.
+    G = green  (right letter, right position)
+    Y = yellow (right letter, wrong position)
+    R = grey   (letter not in remaining answer)
+
+    Duplicate-letter aware — mirrors Wordle rules exactly.
+    """
+    n = len(guess)
+    pattern = ["R"] * n
+    pool = list(answer)  # tracks unmatched answer letters
+
+    # Pass 1 — greens
+    for i in range(n):
+        if guess[i] == answer[i]:
+            pattern[i] = "G"
+            pool[i] = None          # consumed
+
+    # Pass 2 — yellows
+    for i in range(n):
+        if pattern[i] == "G":
+            continue
+        if guess[i] in pool:
+            pattern[i] = "Y"
+            pool[pool.index(guess[i])] = None   # consume one
+
+    return tuple(pattern)
+
+
+# ═══════════════════════════════════════════════
+#  Candidate Filter
+# ═══════════════════════════════════════════════
+
+def filter_words(words: List[str], guesses: List[Tuple]) -> List[str]:
+    """
+    Eliminate words that are inconsistent with guess history.
+    guesses: list of (word, pattern)  — pattern is list/tuple of G/Y/R
+    """
+    remaining = words[:]
+    for guess_word, pattern in guesses:
+        pat = tuple(pattern)
+        remaining = [w for w in remaining if get_pattern(guess_word, w) == pat]
+    return remaining
+
+
+# ═══════════════════════════════════════════════
+#  Entropy Scorer  (core of the smart solver)
+# ═══════════════════════════════════════════════
+
+def entropy_score(guess: str, candidates: List[str]) -> float:
+    """
+    How much information does this guess give us?
+    = Shannon entropy of the distribution of patterns it produces.
+
+    Higher score → guess splits candidates more evenly → better guess.
+    """
+    if not candidates:
+        return 0.0
+
+    counts: Dict[tuple, int] = {}
+    for c in candidates:
+        pat = get_pattern(guess, c)
+        counts[pat] = counts.get(pat, 0) + 1
+
+    n = len(candidates)
+    entropy = 0.0
+    for cnt in counts.values():
+        p = cnt / n
+        entropy -= p * math.log2(p)
+
+    return entropy
+
+
+# ═══════════════════════════════════════════════
+#  Best Guess Picker
+# ═══════════════════════════════════════════════
+
+def best_guess(
+    common: List[str],
+    all_words: List[str],
+    guesses: List[Tuple],
+    attempt: int = 0,
+) -> str:
+    """
+    Pick optimal next word.
+
+    Strategy:
+      attempt 0 → use hardcoded STARTER (fast + pre-optimised)
+      attempt 1 → if candidates still large, use SECOND starter
+      otherwise → entropy-rank remaining candidates, pick best
+                  (prefer candidates over non-candidates)
+    """
+    mode = len(common[0]) if common else 5
+
+    # ── Attempt 0: always use the starter ──
+    if attempt == 0:
+        return STARTERS.get(mode, "slate")
+
+    # ── Filter remaining candidates ──
+    candidates = filter_words(common, guesses)
+
+    # ── No candidates left? Try all_words ──
+    if not candidates:
+        candidates = filter_words(all_words, guesses)
+
+    if not candidates:
+        return STARTERS.get(mode, "slate")
+
+    # ── 1 or 2 left: just guess the first one ──
+    if len(candidates) <= 2:
+        return candidates[0]
+
+    # ── attempt 1 + big pool: sometimes better to use a diversity word ──
+    if attempt == 1 and len(candidates) > 20:
+        second = SECOND.get(mode)
+        if second and second not in [g[0] for g in guesses]:
+            return second
+
+    # ── Entropy ranking ──
+    # Score top candidates (cap at 100 for speed on first few guesses)
+    score_pool = candidates[:100]
+    best_word = candidates[0]
+    best_score = -1.0
+
+    for word in score_pool:
+        score = entropy_score(word, candidates)
+        # Tiny tiebreak: prefer candidates (could literally be the answer)
+        score += 0.05
+        if score > best_score:
+            best_score = score
+            best_word = word
+
+    # Also check a few non-candidate "splitter" words if pool is still large
+    if len(candidates) > 10:
+        all_pool = all_words[:200]
+        for word in all_pool:
+            if word in candidates:
+                continue
+            score = entropy_score(word, candidates)
+            if score > best_score:
+                best_score = score
+                best_word = word
+
+    return best_word
+
+
+# ═══════════════════════════════════════════════
+#  Grid Parser  (reads WordSeek bot reply)
+# ═══════════════════════════════════════════════
 
 def _normalize_line(line: str) -> str:
-    """Convert Unicode math bold/italic letters back to ASCII."""
+    """Convert Unicode math bold/italic letters (like 𝗖𝗥𝗔𝗡𝗘) back to ASCII."""
     result = []
     for ch in line:
         cp = ord(ch)
@@ -84,168 +244,29 @@ def _normalize_line(line: str) -> str:
 
 
 def parse_grid(text: str, mode: int) -> Optional[List[Tuple[str, List[str]]]]:
-    lines = text.strip().split('\n')
+    """
+    Parse the emoji grid from a WordSeek bot message.
+    Handles Unicode bold fonts like 𝗖𝗥𝗔𝗡𝗘 → CRANE via _normalize_line.
+    Returns list of (word, pattern) or None if unparseable.
+    """
+    import re
+    lines = text.strip().split("\n")
     results = []
+
     for line in lines:
-        emojis = re.findall(r'[🟩🟨🟥]', line)
+        emojis = re.findall(r"[🟩🟨🟥⬛⬜]", line)
         norm = _normalize_line(line)
-        words = re.findall(r'[A-Za-z]{' + str(mode) + r'}', norm)
+        words = re.findall(r"[A-Za-z]{" + str(mode) + r"}", norm)
         if len(emojis) == mode and words:
             pattern = []
             for e in emojis:
-                if e == '🟩':
-                    pattern.append('G')
-                elif e == '🟨':
-                    pattern.append('Y')
+                if e == "🟩":
+                    pattern.append("G")
+                elif e == "🟨":
+                    pattern.append("Y")
                 else:
-                    pattern.append('R')
+                    pattern.append("R")
             results.append((words[0].lower(), pattern))
+
     return results if results else None
-
-
-def filter_words(words: List[str], guesses: List[Tuple[str, List[str]]]) -> List[str]:
-    filtered = words[:]
-    for guess_word, pattern in guesses:
-        new_filtered = []
-        for word in filtered:
-            if word == guess_word:
-                continue
-            valid = True
-            for i, (letter, color) in enumerate(zip(guess_word, pattern)):
-                if color == 'G':
-                    if word[i] != letter:
-                        valid = False
-                        break
-                elif color == 'Y':
-                    if letter not in word or word[i] == letter:
-                        valid = False
-                        break
-                elif color == 'R':
-                    confirmed = sum(
-                        1 for j, (l, c) in enumerate(zip(guess_word, pattern))
-                        if l == letter and c in ('G', 'Y')
-                    )
-                    if word.count(letter) > confirmed:
-                        valid = False
-                        break
-            if valid:
-                new_filtered.append(word)
-        filtered = new_filtered
-    return filtered
-
-
-def letter_freq_score(word: str, candidates: List[str]) -> float:
-    if not candidates:
-        return 0
-
-    freq = Counter()
-    pos_freq = [Counter() for _ in range(len(candidates[0]))]
-    for c in candidates:
-        for i, l in enumerate(c):
-            freq[l] += 1
-            pos_freq[i][l] += 1
-
-    total = len(candidates)
-    score = 0.0
-    seen = set()
-    for i, l in enumerate(word):
-        if l in seen:
-            score -= DUPLICATE_PENALTY
-            continue
-        seen.add(l)
-        lf = freq.get(l, 0) / total
-        pf = pos_freq[i].get(l, 0) / total
-        score += lf * (VOWEL_WEIGHT if l in VOWELS else 1.0)
-        score += pf * POSITION_WEIGHT
-        score += UNIQUE_BONUS
-
-    return score
-
-
-def best_guess(words: List[str], all_words: List[str], guesses: List[Tuple[str, List[str]]]) -> str:
-    filtered = filter_words(words, guesses)
-    if not filtered:
-        filtered = filter_words(all_words, guesses)
-    if not filtered:
-        return words[0] if words else "crane"
-    if len(filtered) <= 2:
-        return filtered[0]
-
-    guessed_words = {g[0] for g in guesses}
-    candidate_set = set(filtered)
-
-    if len(guesses) == 1:
-        guess_word, pattern = guesses[0]
-        if all(c == 'R' for c in pattern):
-            unique = set(guess_word)
-            alt_words = [w for w in all_words if not any(l in w for l in unique) and w not in guessed_words]
-            if alt_words:
-                return max(alt_words[:200], key=lambda w: letter_freq_score(w, list(candidate_set)))
-
-    candidates = []
-    seen_candidates = set()
-    for w in all_words:
-        if w in candidate_set and w not in seen_candidates:
-            candidates.append(w)
-            seen_candidates.add(w)
-        elif w not in guessed_words and w not in seen_candidates:
-            candidates.append(w)
-            seen_candidates.add(w)
-
-    if len(candidates) > 500:
-        candidates = candidates[:500]
-
-    best_word = None
-    best_score = -float('inf')
-    for w in candidates:
-        base = letter_freq_score(w, list(candidate_set))
-        if w in candidate_set:
-            base *= 1.3
-        base += len(set(w)) * 5
-        if base > best_score:
-            best_score = base
-            best_word = w
-
-    return best_word if best_word else filtered[0]
-
-
-def best_guesses(words: List[str], all_words: List[str], guesses: List[Tuple[str, List[str]]], n: int = 5) -> List[str]:
-    filtered = filter_words(words, guesses)
-    if not filtered:
-        filtered = filter_words(all_words, guesses)
-    if not filtered:
-        return (words[:n] if words else ["crane"])
-
-    guessed_words = {g[0] for g in guesses}
-    candidate_set = set(filtered)
-
-    candidates = []
-    seen_candidates = set()
-    for w in all_words:
-        if w in candidate_set and w not in seen_candidates:
-            candidates.append(w)
-            seen_candidates.add(w)
-        elif w not in guessed_words and w not in seen_candidates:
-            candidates.append(w)
-            seen_candidates.add(w)
-
-    if len(candidates) > 500:
-        candidates = candidates[:500]
-
-    scored = []
-    for w in candidates:
-        base = letter_freq_score(w, list(candidate_set))
-        if w in candidate_set:
-            base *= 1.3
-        base += len(set(w)) * 5
-        scored.append((base, w))
-
-    scored.sort(key=lambda x: -x[0])
-    return [w for _, w in scored[:n]]
-
-
-STARTERS = {
-    4: "star",
-    5: "crane",
-    6: "strain",
-}
+    
