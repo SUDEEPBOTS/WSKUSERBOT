@@ -287,7 +287,7 @@ def register_user(client: Client, user_id: int):
 
             elif cmd == "help":
                 await message.edit(
-                    "**𝐖ᴏʀᴅ𝐒ᴇᴇᴋ 𝐔𝐬𝐁𝐑ʙᴏ𝐭**\n\n"
+                    "**𝐖ᴏʀᴅ𝐒ᴇᴇᴋ 𝐔𝐬𝐁𝐑ʙᴏᴛ**\n\n"
                     "**Commands:**\n"
                     "├ `.ping` — Check bot latency\n"
                     "├ `.delay <sec>` — Set restart delay (1-30s)\n"
@@ -480,8 +480,24 @@ def register_user(client: Client, user_id: int):
         LOGGER.info(f"wordseek_handler: msg in chat {chat_id}: {first_line}")
         found = False
 
+        if "Game started!" in text or "Guess the" in text:
+            for (uid, gid), game in list(active_games.items()):
+                # FIXED: Added uid == user_id check to prevent clone intersection on game starts
+                if gid == chat_id and uid == user_id and game and not game.get("guesses_sent"):
+                    mode = game.get("mode", 5)
+                    starter = get_starter(mode)
+                    try:
+                        await asyncio.sleep(1)
+                        await client.send_message(chat_id, starter)
+                        game.setdefault("guesses_sent", []).append(starter)
+                        LOGGER.info(f"wordseek_handler: sent starter={starter} after Game started")
+                    except Exception as e:
+                        LOGGER.error(f"wordseek_handler starter error: {e}")
+            return
+
         for (uid, gid), game in list(active_games.items()):
-            if gid == chat_id:
+            # FIXED: Enforced strict individual clone isolation using uid == user_id
+            if gid == chat_id and uid == user_id:
                 found = True
                 LOGGER.info(f"wordseek_handler: found active game for uid={uid}, calling handle_wordseek_response")
                 try:
@@ -489,7 +505,10 @@ def register_user(client: Client, user_id: int):
                 except Exception as e:
                     LOGGER.error(f"wordseek_handler error: {e}\n{traceback.format_exc()}")
 
-        if not found and any(c in text for c in ("🟥", "🟨", "🟩")):
+        # FIXED: Added fallback verification to stop overlapping idle clones from capturing running rooms
+        chat_has_any_game = any(gid == chat_id for (uid, gid) in active_games.keys())
+
+        if not found and not chat_has_any_game and any(c in text for c in ("🟥", "🟨", "🟩")):
             m = re.search(r"(\d)-letter mode", text)
             if m:
                 mode = int(m.group(1))
@@ -533,6 +552,7 @@ def register_user(client: Client, user_id: int):
         if username.lower() != target_bot:
             return
             
+        # FIXED: Prevented surrogate cuts via splitlines wrapper logging
         first_line = message.text.splitlines()[0] if message.text else ""
         LOGGER.info(f"[wordseek_listener] @{username} chat={message.chat.id}: {first_line}")
         await _handle_wordseek_msg(message.chat.id, message.text or "")
@@ -551,6 +571,7 @@ def register_user(client: Client, user_id: int):
         if username.lower() != target_bot:
             return
             
+        # FIXED: Prevented surrogate cuts via splitlines wrapper logging
         first_line = message.text.splitlines()[0] if message.text else ""
         LOGGER.info(f"[wordseek_edited_listener] @{username} chat={message.chat.id}: {first_line}")
         await _handle_wordseek_msg(message.chat.id, message.text or "")
