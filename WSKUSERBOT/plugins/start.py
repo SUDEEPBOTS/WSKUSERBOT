@@ -41,7 +41,7 @@ def register_user(client: Client, user_id: int):
 
             elif cmd == "start":
                 await message.edit(
-                    "**𝐖ᴏʀᴅ𝐒ᴇᴇᴋ 𝐔𝐬𝐁𝐑𝐁𝐨𝐓**\n\n"
+                    "**𝐖ᴏʀᴅ𝐒ᴇᴇᴋ 𝐔𝐬𝐁𝐑ʙᴏᴛ**\n\n"
                     "**Commands:**\n"
                     "├ `.ping` — Check bot latency\n"
                     "├ `.delay <sec>` — Set restart delay (1-30s)\n"
@@ -115,7 +115,6 @@ def register_user(client: Client, user_id: int):
                 winrate = (wins / total * 100) if total > 0 else 0
                 avg = (attempts / wins) if wins > 0 else 0
                 last_word = stats.get("last_word", "")
-                last_group = stats.get("last_group", "")
                 parts = []
                 parts.append(f"**WordSeek Stats**\n")
                 parts.append(f"Total Games: `{total}`")
@@ -288,7 +287,7 @@ def register_user(client: Client, user_id: int):
 
             elif cmd == "help":
                 await message.edit(
-                    "**𝐖ᴏʀᴅ𝐒ᴇᴇᴋ 𝐔𝐬𝐁𝐑𝐁𝐨𝐓**\n\n"
+                    "**𝐖ᴏʀᴅ𝐒ᴇᴇᴋ 𝐔𝐬𝐁𝐑ʙᴏᴛ**\n\n"
                     "**Commands:**\n"
                     "├ `.ping` — Check bot latency\n"
                     "├ `.delay <sec>` — Set restart delay (1-30s)\n"
@@ -359,7 +358,7 @@ def register_user(client: Client, user_id: int):
                         return
                     word = parts[2].lower().strip()
                     await remove_blacklist_word(uid, word)
-                    await message.edit(f"Removed `{word}` from blacklist.")
+                    await message.edit(f"Removed `{word}` to blacklist.")
 
             elif cmd == "export":
                 stats = await get_stats(uid)
@@ -412,7 +411,7 @@ def register_user(client: Client, user_id: int):
                     f"Groups: `{groups}`"
                 )
 
-          elif cmd == "total":
+            elif cmd == "total":
                 stats = get_word_stats()
                 lines = ["**Word Counts**\n"]
                 for mode in [4, 5, 6]:
@@ -474,7 +473,8 @@ def register_user(client: Client, user_id: int):
             else:
                 await message.reply("No active game in this group.")
 
-    @client.on_message(filters.all)
+    # Group 1: Isko alag group diya hai taaki ye baki listeners ko block na kare
+    @client.on_message(filters.all, group=1)
     async def all_debug(_, message: Message):
         if os.environ.get("WSK_DEBUG") == "1":
             LOGGER.info(f"ALL_DEBUG: chat={message.chat.id} type={message.chat.type} from={'None' if not message.from_user else f'id={message.from_user.id} uname=\"{message.from_user.username}\"'} text={message.text[:100] if message.text else 'None'}")
@@ -483,7 +483,6 @@ def register_user(client: Client, user_id: int):
         LOGGER.info(f"wordseek_handler: msg in chat {chat_id}: {text[:100]}")
         found = False
 
-        # WordSeek ne game start kiya — ab starter word bhejo
         if "Game started!" in text or "Guess the" in text:
             for (uid, gid), game in list(active_games.items()):
                 if gid == chat_id and game and not game.get("guesses_sent"):
@@ -538,21 +537,25 @@ def register_user(client: Client, user_id: int):
                             await client.send_message(chat_id, next_word)
                             active_games[(user_id, chat_id)]["guesses_sent"].append(next_word)
 
-    @client.on_message(filters.all)
+    # Group 2: WordSeekBot ke naye messages read karne ke liye
+    @client.on_message(filters.all, group=2)
     async def wordseek_listener(_, message: Message):
-        # Bot messages mein from_user None ho sakta hai — sender_chat bhi check karo
         sender = message.from_user or message.sender_chat
         if not sender:
             return
         username = getattr(sender, "username", None)
         if not username:
             return
-        if username != config.WORDSEEK_BOT:
+        
+        target_bot = config.WORDSEEK_BOT.replace("@", "").strip().lower()
+        if username.lower() != target_bot:
             return
+            
         LOGGER.info(f"[wordseek_listener] @{username} chat={message.chat.id}: {(message.text or '')[:80]}")
         await _handle_wordseek_msg(message.chat.id, message.text or "")
 
-    @client.on_edited_message(filters.all)
+    # Group 2: WordSeekBot ke edited messages read karne ke liye
+    @client.on_edited_message(filters.all, group=2)
     async def wordseek_edited_listener(_, message: Message):
         sender = message.from_user or message.sender_chat
         if not sender:
@@ -560,7 +563,10 @@ def register_user(client: Client, user_id: int):
         username = getattr(sender, "username", None)
         if not username:
             return
-        if username != config.WORDSEEK_BOT:
+            
+        target_bot = config.WORDSEEK_BOT.replace("@", "").strip().lower()
+        if username.lower() != target_bot:
             return
+            
         LOGGER.info(f"[wordseek_edited_listener] @{username} chat={message.chat.id}: {(message.text or '')[:80]}")
         await _handle_wordseek_msg(message.chat.id, message.text or "")
