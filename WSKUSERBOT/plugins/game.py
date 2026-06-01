@@ -22,7 +22,7 @@ def get_user_games(user_id: int):
     return {k: v for k, v in active_games.items() if k[0] == user_id}
 
 
-async def start_game(client: Client, user_id: int, group_id: int, mode: int = 5, announce: bool = True, delay: int = 3):
+async def start_game(client: Client, user_id: int, group_id: int, mode: int = 5, announce: bool = False, delay: int = 3):
     LOGGER.info(f"[start_game] uid={user_id} group={group_id} mode={mode}")
     common, all_words = load_words(mode)
     blacklist = await get_blacklist(user_id)
@@ -32,7 +32,6 @@ async def start_game(client: Client, user_id: int, group_id: int, mode: int = 5,
         all_words = [w for w in all_words if w not in bl_set]
 
     # Game state banao — guesses_sent EMPTY rakho
-    # Starter word WordSeek ke "Game started!" response pe bhejenge
     active_games[(user_id, group_id)] = {
         "client": client,
         "mode": mode,
@@ -45,22 +44,13 @@ async def start_game(client: Client, user_id: int, group_id: int, mode: int = 5,
         "delay": delay,
         "last_solved_word": None,
         "remaining": len(common),
-        "waiting_for_start": True,  # WordSeek ke confirm ka wait kar rahe hain
+        "waiting_for_start": True,
     }
 
-    if announce:
-        try:
-            await client.send_message(
-                group_id,
-                f"**Game Started!** Guess the **{MODE_NAMES[mode]}** word!"
-            )
-        except Exception as e:
-            LOGGER.error(f"[start_game] announce error: {e}")
-
+    # FIXED: "Game Started!..." waala text broadcast yahan se poori tarah hata diya hai
     await asyncio.sleep(1)
     LOGGER.info(f"[start_game] sending START_CMD: {START_CMDS[mode]}")
     await client.send_message(group_id, START_CMDS[mode])
-    # Starter word ab nahi bhejenge — WordSeek ke "Game started!" pe bhejna hai
 
 
 async def handle_wordseek_response(client: Client, user_id: int, group_id: int, message_text: str):
@@ -75,7 +65,6 @@ async def handle_wordseek_response(client: Client, user_id: int, group_id: int, 
     common = game.get("common", [])
     all_words = game.get("all_words", common)
 
-    # FIXED: Slicing [:120] hata kar splitlines use kiya taaki surrogate pairs cut hone se UnicodeDecodeError na aaye
     first_line = message_text.splitlines()[0] if message_text else ""
     LOGGER.info(f"[handle] uid={user_id} msg: {first_line}")
 
@@ -104,7 +93,8 @@ async def handle_wordseek_response(client: Client, user_id: int, group_id: int, 
         await update_stats(user_id, won=True, attempts=attempt_count, group_id=group_id, correct_word=word)
         del active_games[key]
         await asyncio.sleep(delay)
-        await start_game(client, user_id, group_id, mode, announce=True, delay=delay)
+        # FIXED: announce=False pass kiya taaki next round automatic bina shor ke shuru ho
+        await start_game(client, user_id, group_id, mode, announce=False, delay=delay)
         return
 
     # Game over
@@ -113,7 +103,8 @@ async def handle_wordseek_response(client: Client, user_id: int, group_id: int, 
         await update_stats(user_id, won=False, attempts=30, group_id=group_id)
         del active_games[key]
         await asyncio.sleep(delay)
-        await start_game(client, user_id, group_id, mode, announce=True, delay=delay)
+        # FIXED: announce=False pass kiya yahan bhi
+        await start_game(client, user_id, group_id, mode, announce=False, delay=delay)
         return
 
     # Invalid word
@@ -178,4 +169,4 @@ async def handle_wordseek_response(client: Client, user_id: int, group_id: int, 
         await client.send_message(group_id, next_word)
         game.setdefault("guesses_sent", []).append(next_word)
         LOGGER.info(f"[handle] uid={user_id} sent after floodwait: {next_word}")
-        
+            
