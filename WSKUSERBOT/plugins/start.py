@@ -448,14 +448,14 @@ def register_user(client: Client, user_id: int):
                 return
             key = (user_id, group_id)
             if key in active_games:
-                await message.reply("**Game already running in this group!** Use **Bye** to stop.")
                 return
             active_games[key] = None
-            await message.reply("**Starting game...**")
+            # FIXED: "Starting game..." text hata diya taaki bilkul real lage
             try:
                 mode = session_data.get("mode", 5)
                 delay = session_data.get("delay", 3)
-                await start_game(client, user_id, group_id, mode, announce=True, delay=delay)
+                # FIXED: announce=False kar diya hai taaki extra text na bheje
+                await start_game(client, user_id, group_id, mode, announce=False, delay=delay)
             except Exception:
                 if key in active_games and active_games[key] is None:
                     del active_games[key]
@@ -469,9 +469,7 @@ def register_user(client: Client, user_id: int):
                     await client.send_message(group_id, "/end@WordSeekBot")
                 except Exception:
                     pass
-                await message.reply("**Game Stopped!**")
-            else:
-                await message.reply("No active game in this group.")
+                # FIXED: "Game Stopped!" wala message reply se uda diya
 
     # Group 1: Isko alag group diya hai taaki ye baki listeners ko block na kare
     @client.on_message(filters.all, group=1)
@@ -483,7 +481,6 @@ def register_user(client: Client, user_id: int):
         LOGGER.info(f"wordseek_handler: msg in chat {chat_id}: {text[:100]}")
         found = False
 
-        # FIXED: Purana interceptor block yahan se hata diya hai taaki handle_wordseek_response ko direct message mile.
         for (uid, gid), game in list(active_games.items()):
             if gid == chat_id:
                 found = True
