@@ -75,7 +75,9 @@ async def handle_wordseek_response(client: Client, user_id: int, group_id: int, 
     common = game.get("common", [])
     all_words = game.get("all_words", common)
 
-    LOGGER.info(f"[handle] uid={user_id} msg: {message_text[:120]}")
+    # FIXED: Slicing [:120] hata kar splitlines use kiya taaki surrogate pairs cut hone se UnicodeDecodeError na aaye
+    first_line = message_text.splitlines()[0] if message_text else ""
+    LOGGER.info(f"[handle] uid={user_id} msg: {first_line}")
 
     # WordSeek ne game confirm kiya — ab starter bhejo
     if game.get("waiting_for_start") and ("Game started!" in message_text or "Guess the" in message_text):
