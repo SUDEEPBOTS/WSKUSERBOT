@@ -412,7 +412,7 @@ def register_user(client: Client, user_id: int):
                     f"Groups: `{groups}`"
                 )
 
-            elif cmd == "total":
+          elif cmd == "total":
                 stats = get_word_stats()
                 lines = ["**Word Counts**\n"]
                 for mode in [4, 5, 6]:
@@ -540,16 +540,27 @@ def register_user(client: Client, user_id: int):
 
     @client.on_message(filters.all)
     async def wordseek_listener(_, message: Message):
-        if not message.from_user:
+        # Bot messages mein from_user None ho sakta hai — sender_chat bhi check karo
+        sender = message.from_user or message.sender_chat
+        if not sender:
             return
-        if message.from_user.username != config.WORDSEEK_BOT:
+        username = getattr(sender, "username", None)
+        if not username:
             return
+        if username != config.WORDSEEK_BOT:
+            return
+        LOGGER.info(f"[wordseek_listener] @{username} chat={message.chat.id}: {(message.text or '')[:80]}")
         await _handle_wordseek_msg(message.chat.id, message.text or "")
 
     @client.on_edited_message(filters.all)
     async def wordseek_edited_listener(_, message: Message):
-        if not message.from_user:
+        sender = message.from_user or message.sender_chat
+        if not sender:
             return
-        if message.from_user.username != config.WORDSEEK_BOT:
+        username = getattr(sender, "username", None)
+        if not username:
             return
+        if username != config.WORDSEEK_BOT:
+            return
+        LOGGER.info(f"[wordseek_edited_listener] @{username} chat={message.chat.id}: {(message.text or '')[:80]}")
         await _handle_wordseek_msg(message.chat.id, message.text or "")
