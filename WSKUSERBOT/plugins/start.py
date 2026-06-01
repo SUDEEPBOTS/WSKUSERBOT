@@ -466,6 +466,10 @@ def register_user(client: Client, user_id: int):
             key = (user_id, group_id)
             if key in active_games:
                 del active_games[key]
+                try:
+                    await client.send_message(group_id, "/end@WordSeekBot")
+                except Exception:
+                    pass
                 await message.reply("**Game Stopped!**")
             else:
                 await message.reply("No active game in this group.")
@@ -478,6 +482,23 @@ def register_user(client: Client, user_id: int):
     async def _handle_wordseek_msg(chat_id: int, text: str):
         LOGGER.info(f"wordseek_handler: msg in chat {chat_id}: {text[:100]}")
         found = False
+
+        # WordSeek ne game start kiya — ab starter word bhejo
+        if "Game started!" in text or "Guess the" in text:
+            for (uid, gid), game in list(active_games.items()):
+                if gid == chat_id and game and not game.get("guesses_sent"):
+                    mode = game.get("mode", 5)
+                    common = game.get("common", [])
+                    starter = get_starter(mode)
+                    try:
+                        await asyncio.sleep(1)
+                        await client.send_message(chat_id, starter)
+                        game.setdefault("guesses_sent", []).append(starter)
+                        LOGGER.info(f"wordseek_handler: sent starter={starter} after Game started")
+                    except Exception as e:
+                        LOGGER.error(f"wordseek_handler starter error: {e}")
+            return
+
         for (uid, gid), game in list(active_games.items()):
             if gid == chat_id:
                 found = True
