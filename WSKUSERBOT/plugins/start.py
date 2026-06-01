@@ -327,7 +327,8 @@ def register_user(client: Client, user_id: int):
 
             elif cmd == "blacklist":
                 parts = message.text.split()
-                if len(parts) < 2 or parts[1].lower()又不 in ("list", "add", "del", "remove"):
+                # FIXED: Removed the buggy Chinese layout characters and corrected to 'not in'
+                if len(parts) < 2 or parts[1].lower() not in ("list", "add", "del", "remove"):
                     await message.edit(
                         "**Blacklist Manager**\n\n"
                         "├ `.blacklist list` — Show blacklisted words\n"
@@ -503,8 +504,8 @@ def register_user(client: Client, user_id: int):
                 except Exception as e:
                     LOGGER.error(f"wordseek_handler error: {e}\n{traceback.format_exc()}")
 
-        # FIXED: Pure uninvited groups hijacking block ko yahan se delete kar diya gaya hai.
-        # Ab ye tabhi khelega jab aap is specific group mein khud se 'Hupp' bologe!
+        # FIXED: Pure uninvited fallback hijacking logic ko yahan se delete kar diya gaya hai.
+        # Ab ye bot tabhi khelega jab aap is group mein khud se 'Hupp' bolkar game allocate karoge!
 
     # Group 2: WordSeekBot ke naye messages read karne ke liye
     @client.on_message(filters.all, group=2)
