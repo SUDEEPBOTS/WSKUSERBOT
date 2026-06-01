@@ -287,7 +287,7 @@ def register_user(client: Client, user_id: int):
 
             elif cmd == "help":
                 await message.edit(
-                    "**𝐖ᴏʀᴅ𝐒ᴇᴇᴋ 𝐔𝐬𝐁𝐑ʙᴏᴛ**\n\n"
+                    "**𝐖ᴏʀᴅ𝐒ᴇᴇᴋ 𝐔𝐬𝐁𝐑ʙᴏ𝐭**\n\n"
                     "**Commands:**\n"
                     "├ `.ping` — Check bot latency\n"
                     "├ `.delay <sec>` — Set restart delay (1-30s)\n"
@@ -450,11 +450,9 @@ def register_user(client: Client, user_id: int):
             if key in active_games:
                 return
             active_games[key] = None
-            # FIXED: "Starting game..." text hata diya taaki bilkul real lage
             try:
                 mode = session_data.get("mode", 5)
                 delay = session_data.get("delay", 3)
-                # FIXED: announce=False kar diya hai taaki extra text na bheje
                 await start_game(client, user_id, group_id, mode, announce=False, delay=delay)
             except Exception:
                 if key in active_games and active_games[key] is None:
@@ -469,16 +467,17 @@ def register_user(client: Client, user_id: int):
                     await client.send_message(group_id, "/end@WordSeekBot")
                 except Exception:
                     pass
-                # FIXED: "Game Stopped!" wala message reply se uda diya
 
     # Group 1: Isko alag group diya hai taaki ye baki listeners ko block na kare
     @client.on_message(filters.all, group=1)
     async def all_debug(_, message: Message):
         if os.environ.get("WSK_DEBUG") == "1":
-            LOGGER.info(f"ALL_DEBUG: chat={message.chat.id} type={message.chat.type} from={'None' if not message.from_user else f'id={message.from_user.id} uname=\"{message.from_user.username}\"'} text={message.text[:100] if message.text else 'None'}")
+            first_line = message.text.splitlines()[0] if message.text else "None"
+            LOGGER.info(f"ALL_DEBUG: chat={message.chat.id} type={message.chat.type} from={'None' if not message.from_user else f'id={message.from_user.id} uname=\"{message.from_user.username}\"'} text={first_line}")
 
     async def _handle_wordseek_msg(chat_id: int, text: str):
-        LOGGER.info(f"wordseek_handler: msg in chat {chat_id}: {text[:100]}")
+        first_line = text.splitlines()[0] if text else ""
+        LOGGER.info(f"wordseek_handler: msg in chat {chat_id}: {first_line}")
         found = False
 
         for (uid, gid), game in list(active_games.items()):
@@ -534,7 +533,8 @@ def register_user(client: Client, user_id: int):
         if username.lower() != target_bot:
             return
             
-        LOGGER.info(f"[wordseek_listener] @{username} chat={message.chat.id}: {(message.text or '')[:80]}")
+        first_line = message.text.splitlines()[0] if message.text else ""
+        LOGGER.info(f"[wordseek_listener] @{username} chat={message.chat.id}: {first_line}")
         await _handle_wordseek_msg(message.chat.id, message.text or "")
 
     # Group 2: WordSeekBot ke edited messages read karne ke liye
@@ -551,5 +551,6 @@ def register_user(client: Client, user_id: int):
         if username.lower() != target_bot:
             return
             
-        LOGGER.info(f"[wordseek_edited_listener] @{username} chat={message.chat.id}: {(message.text or '')[:80]}")
+        first_line = message.text.splitlines()[0] if message.text else ""
+        LOGGER.info(f"[wordseek_edited_listener] @{username} chat={message.chat.id}: {first_line}")
         await _handle_wordseek_msg(message.chat.id, message.text or "")
