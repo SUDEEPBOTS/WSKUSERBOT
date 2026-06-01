@@ -483,21 +483,7 @@ def register_user(client: Client, user_id: int):
         LOGGER.info(f"wordseek_handler: msg in chat {chat_id}: {text[:100]}")
         found = False
 
-        if "Game started!" in text or "Guess the" in text:
-            for (uid, gid), game in list(active_games.items()):
-                if gid == chat_id and game and not game.get("guesses_sent"):
-                    mode = game.get("mode", 5)
-                    common = game.get("common", [])
-                    starter = get_starter(mode)
-                    try:
-                        await asyncio.sleep(1)
-                        await client.send_message(chat_id, starter)
-                        game.setdefault("guesses_sent", []).append(starter)
-                        LOGGER.info(f"wordseek_handler: sent starter={starter} after Game started")
-                    except Exception as e:
-                        LOGGER.error(f"wordseek_handler starter error: {e}")
-            return
-
+        # FIXED: Purana interceptor block yahan se hata diya hai taaki handle_wordseek_response ko direct message mile.
         for (uid, gid), game in list(active_games.items()):
             if gid == chat_id:
                 found = True
