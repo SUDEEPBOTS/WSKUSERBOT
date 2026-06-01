@@ -23,12 +23,16 @@ def get_user_games(user_id: int):
 
 
 async def start_game(client: Client, user_id: int, group_id: int, mode: int = 5, announce: bool = True, delay: int = 3):
+    LOGGER.info(f"[start_game] uid={user_id} group={group_id} mode={mode}")
     common, all_words = load_words(mode)
     blacklist = await get_blacklist(user_id)
     if blacklist:
         bl_set = set(w.lower().strip() for w in blacklist)
         common = [w for w in common if w not in bl_set]
         all_words = [w for w in all_words if w not in bl_set]
+
+    # Game state banao — guesses_sent EMPTY rakho
+    # Starter word WordSeek ke "Game started!" response pe bhejenge
     active_games[(user_id, group_id)] = {
         "client": client,
         "mode": mode,
@@ -41,6 +45,7 @@ async def start_game(client: Client, user_id: int, group_id: int, mode: int = 5,
         "delay": delay,
         "last_solved_word": None,
         "remaining": len(common),
+        "waiting_for_start": True,  # WordSeek ke confirm ka wait kar rahe hain
     }
 
     if announce:
@@ -49,21 +54,19 @@ async def start_game(client: Client, user_id: int, group_id: int, mode: int = 5,
                 group_id,
                 f"**Game Started!** Guess the **{MODE_NAMES[mode]}** word!"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            LOGGER.error(f"[start_game] announce error: {e}")
 
     await asyncio.sleep(1)
+    LOGGER.info(f"[start_game] sending START_CMD: {START_CMDS[mode]}")
     await client.send_message(group_id, START_CMDS[mode])
-    await asyncio.sleep(2)
-
-    starter = get_starter(mode)
-    await client.send_message(group_id, starter)
-    active_games[(user_id, group_id)]["guesses_sent"].append(starter)
+    # Starter word ab nahi bhejenge — WordSeek ke "Game started!" pe bhejna hai
 
 
 async def handle_wordseek_response(client: Client, user_id: int, group_id: int, message_text: str):
     key = (user_id, group_id)
     if key not in active_games:
+        LOGGER.info(f"[handle] uid={user_id} group={group_id} — no active game, ignoring")
         return
 
     game = active_games[key]
@@ -72,12 +75,29 @@ async def handle_wordseek_response(client: Client, user_id: int, group_id: int, 
     common = game.get("common", [])
     all_words = game.get("all_words", common)
 
-    grid = parse_grid(message_text, mode)
-    attempt_count = len(grid) if grid else len(game.get("guesses_sent", []))
-    LOGGER.info(f"[uid={user_id}] parse_grid returned: {grid}, attempt_count={attempt_count}")
-    LOGGER.info(f"[uid={user_id}] msg_text preview: {message_text[:100]}")
+    LOGGER.info(f"[handle] uid={user_id} msg: {message_text[:120]}")
 
+    # WordSeek ne game confirm kiya — ab starter bhejo
+    if game.get("waiting_for_start") and ("Game started!" in message_text or "Guess the" in message_text):
+        LOGGER.info(f"[handle] uid={user_id} WordSeek confirmed game start! Sending starter...")
+        game["waiting_for_start"] = False
+        starter = get_starter(mode)
+        await asyncio.sleep(1)
+        try:
+            await client.send_message(group_id, starter)
+            game.setdefault("guesses_sent", []).append(starter)
+            LOGGER.info(f"[handle] uid={user_id} sent starter: {starter}")
+        except FloodWait as e:
+            await asyncio.sleep(e.value)
+            await client.send_message(group_id, starter)
+            game.setdefault("guesses_sent", []).append(starter)
+        return
+
+    # Game jeet gaye
     if "Congrats" in message_text or "correctly" in message_text:
+        LOGGER.info(f"[handle] uid={user_id} WON!")
+        grid = parse_grid(message_text, mode)
+        attempt_count = len(grid) if grid else len(game.get("guesses_sent", []))
         word = grid[-1][0] if grid else game.get("last_solved_word")
         await update_stats(user_id, won=True, attempts=attempt_count, group_id=group_id, correct_word=word)
         del active_games[key]
@@ -85,24 +105,30 @@ async def handle_wordseek_response(client: Client, user_id: int, group_id: int, 
         await start_game(client, user_id, group_id, mode, announce=True, delay=delay)
         return
 
+    # Game over
     if "Better luck" in message_text or "Game over" in message_text or "better luck" in message_text:
+        LOGGER.info(f"[handle] uid={user_id} GAME OVER")
         await update_stats(user_id, won=False, attempts=30, group_id=group_id)
         del active_games[key]
         await asyncio.sleep(delay)
         await start_game(client, user_id, group_id, mode, announce=True, delay=delay)
         return
 
+    # Invalid word
     lower = message_text.lower()
     if any(msg in lower for msg in INVALID_MSGS):
         already_sent = game.get("guesses_sent", [])
         bad_word = already_sent[-1] if already_sent else None
+        LOGGER.info(f"[handle] uid={user_id} INVALID word: {bad_word}")
         if bad_word:
             common = [w for w in common if w != bad_word]
             game["common"] = common
         await asyncio.sleep(1)
-        next_word = best_guess(common, all_words, game.get("guesses", []), attempt=attempt_count)
-        LOGGER.info(f"[uid={user_id}] INVALID path, next_word={next_word}, guesses_sent={game.get('guesses_sent', [])}")
-        if next_word and next_word not in game.get("guesses_sent", []):
+        grid = game.get("guesses", [])
+        attempt_count = len(already_sent)
+        next_word = best_guess(common, all_words, grid, attempt=attempt_count)
+        LOGGER.info(f"[handle] uid={user_id} INVALID -> next_word={next_word}")
+        if next_word and next_word not in already_sent:
             try:
                 await client.send_message(group_id, next_word)
                 game.setdefault("guesses_sent", []).append(next_word)
@@ -112,33 +138,42 @@ async def handle_wordseek_response(client: Client, user_id: int, group_id: int, 
                 game.setdefault("guesses_sent", []).append(next_word)
         return
 
+    # Emoji grid parse karo
+    grid = parse_grid(message_text, mode)
+    LOGGER.info(f"[handle] uid={user_id} parse_grid={grid}")
+
     if not grid:
-        LOGGER.info(f"[uid={user_id}] grid is None, returning early")
+        LOGGER.info(f"[handle] uid={user_id} grid is None/empty — ignoring message")
         return
 
     game["guesses"] = grid
     game["attempts"] = len(grid)
+    attempt_count = len(grid)
 
     filtered = filter_words(common, grid)
     game["remaining"] = len(filtered)
-    LOGGER.info(f"[uid={user_id}] filtered down to {len(filtered)} candidates")
+    LOGGER.info(f"[handle] uid={user_id} filtered candidates={len(filtered)}")
 
     next_word = best_guess(common, all_words, grid, attempt=attempt_count)
-    LOGGER.info(f"[uid={user_id}] best_guess={next_word}, guesses_sent={game.get('guesses_sent', [])}")
+    LOGGER.info(f"[handle] uid={user_id} best_guess={next_word} guesses_sent={game.get('guesses_sent', [])}")
+
     if not next_word:
-        LOGGER.error(f"[uid={user_id}] best_guess returned None, cannot proceed")
+        LOGGER.error(f"[handle] uid={user_id} best_guess returned None!")
         return
+
     if next_word in game.get("guesses_sent", []):
-        LOGGER.info(f"[uid={user_id}] next_word already in guesses_sent, returning")
+        LOGGER.info(f"[handle] uid={user_id} {next_word} already sent, skipping")
         return
 
     await asyncio.sleep(2)
     try:
         await client.send_message(group_id, next_word)
         game.setdefault("guesses_sent", []).append(next_word)
-        LOGGER.info(f"[uid={user_id}] sent: {next_word}")
+        LOGGER.info(f"[handle] uid={user_id} sent: {next_word}")
     except FloodWait as e:
+        LOGGER.warning(f"[handle] uid={user_id} FloodWait {e.value}s")
         await asyncio.sleep(e.value)
         await client.send_message(group_id, next_word)
         game.setdefault("guesses_sent", []).append(next_word)
-        LOGGER.info(f"[uid={user_id}] sent (after floodwait): {next_word}")
+        LOGGER.info(f"[handle] uid={user_id} sent after floodwait: {next_word}")
+        
