@@ -133,7 +133,6 @@ def register(client: Client):
                 await add_user_session(user_id, session, 5, 3)
                 from WSKUSERBOT.user_manager import start_user_client
                 await start_user_client(user_id, session)
-                me = await (await client.get_me())
                 await msg.delete()
 
                 caption = (

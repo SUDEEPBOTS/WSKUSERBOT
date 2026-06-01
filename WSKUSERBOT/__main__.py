@@ -2,7 +2,7 @@ import asyncio
 from pyrogram import Client
 from WSKUSERBOT.plugins import register_all
 from WSKUSERBOT.logging import LOGGER
-from WSKUSERBOT.plugins.solver import load_words, WORD_CACHE
+from WSKUSERBOT.plugins.solver import load_words
 from WSKUSERBOT.user_manager import start_all_user_clients, user_clients
 import config
 
@@ -15,8 +15,8 @@ async def main():
 
     LOGGER.info("Preloading solver word cache...")
     for mode in (4, 5, 6):
-        load_words(mode)
-        LOGGER.info(f"Cached {len(WORD_CACHE.get(mode, []))} words for {mode}-letter mode")
+        common, all_w = load_words(mode)
+        LOGGER.info(f"Cached {len(common)} common + {len(all_w)} total words for {mode}-letter mode")
 
     app = Client(
         "WSKBot",

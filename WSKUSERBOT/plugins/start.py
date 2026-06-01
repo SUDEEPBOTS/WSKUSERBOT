@@ -1,15 +1,17 @@
 import time
 import os
 import sys
+import re
 import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from WSKUSERBOT.Mangodb import get_user_session, update_user_delay, get_stats, get_top_players, reset_user_stats, remove_user_session, get_blacklist, add_blacklist_word, remove_blacklist_word, update_user_mode
 from WSKUSERBOT.plugins.game import active_games, get_user_games, handle_wordseek_response, start_game
-from WSKUSERBOT.plugins.solver import best_guess, best_guesses, get_word_stats, filter_words
+from WSKUSERBOT.plugins.solver import best_guess, best_guesses, get_word_stats, filter_words, get_starter, load_words, parse_grid
 from WSKUSERBOT.plugins.commands import MODE_NAMES
 from WSKUSERBOT.logging import LOGGER, LOG_FILE
 import config
+import traceback
 
 
 DELAY_HELP = "Usage: `.delay <seconds>`\nSet restart delay (1-30s)."
@@ -17,11 +19,10 @@ DELAY_HELP = "Usage: `.delay <seconds>`\nSet restart delay (1-30s)."
 
 def register_user(client: Client, user_id: int):
     """Register . commands, Hupp/Bye, and WordSeekBot listener on a user client."""
-
-    user_filter = filters.create(lambda _, __, m: m.from_user and m.from_user.id == user_id)
+    LOGGER.info(f"register_user called for uid={user_id}, client={id(client)}")
 
     @client.on_message(
-        filters.command(["ping", "start", "delay", "top", "hint", "suggest", "gstatus", "reset", "id", "streak", "das", "logout", "total", "mode4", "mode5", "mode6", "mode", "help", "restart", "logs", "export", "groups", "blacklist", "history", "define"], prefixes=".")
+        filters.command(["ping", "start", "delay", "top", "hint", "suggest", "gstatus", "stats", "reset", "id", "streak", "das", "logout", "total", "mode4", "mode5", "mode6", "mode", "help", "restart", "logs", "export", "groups", "blacklist", "history", "define"], prefixes=".")
     )
     async def user_cmds(_, message: Message):
         cmd = message.command[0].lower()
@@ -100,14 +101,33 @@ def register_user(client: Client, user_id: int):
                     lines.append(f"`{i}.` ID `{u}` — Wins: `{w}` WR: `{wr:.0f}%` 🔥`{s}`")
                 await message.edit("\n".join(lines))
 
-            elif cmd == "streak":
+            elif cmd == "stats" or cmd == "streak":
                 stats = await get_stats(uid)
                 if not stats:
                     await message.edit("No stats yet. Start playing with **Hupp**.")
                     return
+                total = stats.get("total_games", 0)
+                wins = stats.get("wins", 0)
+                attempts = stats.get("total_attempts", 0)
                 streak = stats.get("streak", 0)
                 max_streak = stats.get("max_streak", 0)
-                await message.edit(f"Current streak: `{streak}`\nBest streak: `{max_streak}`")
+                one_attempt = stats.get("one_attempt_wins", 0)
+                winrate = (wins / total * 100) if total > 0 else 0
+                avg = (attempts / wins) if wins > 0 else 0
+                last_word = stats.get("last_word", "")
+                last_group = stats.get("last_group", "")
+                parts = []
+                parts.append(f"**WordSeek Stats**\n")
+                parts.append(f"Total Games: `{total}`")
+                parts.append(f"Wins: `{wins}`")
+                parts.append(f"Win Rate: `{winrate:.1f}%`")
+                parts.append(f"Avg Attempts: `{avg:.1f}`")
+                parts.append(f"1-Guess Wins: `{one_attempt}`")
+                parts.append(f"Streak: `{streak}` 🔥")
+                parts.append(f"Best Streak: `{max_streak}`")
+                if cmd == "stats" and last_word:
+                    parts.append(f"Last Word: `{last_word}`")
+                await message.edit("\n".join(parts))
 
             elif cmd == "gstatus":
                 key, game = None, None
@@ -149,16 +169,17 @@ def register_user(client: Client, user_id: int):
                     return
                 mode = game.get("mode", 5)
                 guesses = game.get("guesses", [])
-                words = game.get("words", [])
+                common = game.get("common", [])
+                all_words = game.get("all_words", common)
                 if not guesses:
-                    starter = {"4": "star", "5": "crane", "6": "strain"}.get(str(mode), "crane")
+                    starter = get_starter(mode)
                     await message.edit(f"First guess will be: `{starter}`")
                     return
-                filtered = filter_words(words, guesses)
+                filtered = filter_words(common, guesses)
                 if not filtered:
                     await message.edit("No matching words found. Something went wrong!")
                     return
-                next_word = best_guess(words, words, guesses)
+                next_word = best_guess(common, all_words, guesses)
                 if not next_word:
                     await message.edit("Could not determine next guess.")
                     return
@@ -181,16 +202,17 @@ def register_user(client: Client, user_id: int):
                     return
                 mode = game.get("mode", 5)
                 guesses = game.get("guesses", [])
-                words = game.get("words", [])
+                common = game.get("common", [])
+                all_words = game.get("all_words", common)
                 if not guesses:
-                    starter = {"4": "star", "5": "crane", "6": "strain"}.get(str(mode), "crane")
+                    starter = get_starter(mode)
                     await message.edit(f"Top suggestions:\n`1.` `{starter}` (first guess)")
                     return
-                filtered = filter_words(words, guesses)
+                filtered = filter_words(common, guesses)
                 if not filtered:
                     await message.edit("No matching words found.")
                     return
-                top_n = best_guesses(words, words, guesses, n=5)
+                top_n = best_guesses(common, all_words, guesses, n=5)
                 lines = ["**Top 5 Suggestions**\n"]
                 for i, w in enumerate(top_n, 1):
                     lines.append(f"`{i}.` `{w}`")
@@ -425,53 +447,88 @@ def register_user(client: Client, user_id: int):
             if not session_data:
                 await message.reply("No session found!")
                 return
-            if (user_id, group_id) in active_games:
+            key = (user_id, group_id)
+            if key in active_games:
                 await message.reply("**Game already running in this group!** Use **Bye** to stop.")
                 return
+            active_games[key] = None
             await message.reply("**Starting game...**")
-            mode = session_data.get("mode", 5)
-            delay = session_data.get("delay", 3)
-            await start_game(client, user_id, group_id, mode, announce=True, delay=delay)
+            try:
+                mode = session_data.get("mode", 5)
+                delay = session_data.get("delay", 3)
+                await start_game(client, user_id, group_id, mode, announce=True, delay=delay)
+            except Exception:
+                if key in active_games and active_games[key] is None:
+                    del active_games[key]
+                raise
 
         elif lower_text == "bye":
             key = (user_id, group_id)
             if key in active_games:
-                game = active_games[key]
-                try:
-                    await game["client"].stop()
-                except Exception:
-                    pass
                 del active_games[key]
                 await message.reply("**Game Stopped!**")
             else:
                 await message.reply("No active game in this group.")
 
-    @client.on_message(filters.text)
-    async def wordseek_listener(_, message: Message):
-        if not message.from_user or message.from_user.username != config.WORDSEEK_BOT:
-            return
-        text = message.text or ""
-        chat_id = message.chat.id
+    @client.on_message(filters.all)
+    async def all_debug(_, message: Message):
+        if os.environ.get("WSK_DEBUG") == "1":
+            LOGGER.info(f"ALL_DEBUG: chat={message.chat.id} type={message.chat.type} from={'None' if not message.from_user else f'id={message.from_user.id} uname=\"{message.from_user.username}\"'} text={message.text[:100] if message.text else 'None'}")
 
-        # If no active game in this chat, try to auto-detect from WordSeekBot message
+    async def _handle_wordseek_msg(chat_id: int, text: str):
+        LOGGER.info(f"wordseek_handler: msg in chat {chat_id}: {text[:100]}")
         found = False
         for (uid, gid), game in list(active_games.items()):
             if gid == chat_id:
                 found = True
-                await handle_wordseek_response(game["client"], uid, gid, text)
+                LOGGER.info(f"wordseek_handler: found active game for uid={uid}, calling handle_wordseek_response")
+                try:
+                    await handle_wordseek_response(game["client"], uid, gid, text)
+                except Exception as e:
+                    LOGGER.error(f"wordseek_handler error: {e}\n{traceback.format_exc()}")
 
         if not found and any(c in text for c in ("🟥", "🟨", "🟩")):
-            import re
             m = re.search(r"(\d)-letter mode", text)
             if m:
                 mode = int(m.group(1))
                 session_data = await get_user_session(user_id)
                 if session_data:
                     delay = session_data.get("delay", 3)
-                    await start_game(client, user_id, chat_id, mode, announce=False, delay=delay)
-                    await asyncio.sleep(2)
-                    starter = {"4": "star", "5": "crane", "6": "strain"}.get(str(mode), "crane")
-                    g = active_games.get((user_id, chat_id))
-                    if g:
-                        g.setdefault("guesses_sent", []).append(starter)
-                    await client.send_message(chat_id, starter)
+                    common, all_words = load_words(mode)
+                    grid = parse_grid(text, mode)
+                    if grid:
+                        guessed_words = [w for w, _ in grid]
+                        active_games[(user_id, chat_id)] = {
+                            "client": client,
+                            "mode": mode,
+                            "guesses": grid,
+                            "common": common,
+                            "all_words": all_words,
+                            "group_id": chat_id,
+                            "attempts": len(grid),
+                            "guesses_sent": guessed_words[:],
+                            "delay": delay,
+                            "last_solved_word": None,
+                            "remaining": len(filter_words(common, grid)),
+                        }
+                        next_word = best_guess(common, all_words, grid, attempt=len(grid))
+                        if next_word and next_word not in guessed_words:
+                            await asyncio.sleep(2)
+                            await client.send_message(chat_id, next_word)
+                            active_games[(user_id, chat_id)]["guesses_sent"].append(next_word)
+
+    @client.on_message(filters.all)
+    async def wordseek_listener(_, message: Message):
+        if not message.from_user:
+            return
+        if message.from_user.username != config.WORDSEEK_BOT:
+            return
+        await _handle_wordseek_msg(message.chat.id, message.text or "")
+
+    @client.on_edited_message(filters.all)
+    async def wordseek_edited_listener(_, message: Message):
+        if not message.from_user:
+            return
+        if message.from_user.username != config.WORDSEEK_BOT:
+            return
+        await _handle_wordseek_msg(message.chat.id, message.text or "")

@@ -11,19 +11,52 @@ from typing import List, Tuple, Dict, Optional
 
 BASE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Words")
 
-# ── Best opening words (pre-researched, high letter coverage) ──
-STARTERS: Dict[int, str] = {
-    4: "rate",    # R, A, T, E — 4 very common letters
-    5: "slate",   # S, L, A, T, E — top 5-letter opener
-    6: "clears",  # C, L, E, A, R, S — covers 6 common letters
-}
+_STARTER_CACHE: Dict[int, str] = {}
+_WORD_CACHE: Dict[int, Tuple[List[str], List[str]]] = {}
 
-# ── Second guess if starter gives little info ──
-SECOND: Dict[int, str] = {
-    4: "noun",
-    5: "crony",
-    6: "bounty",
-}
+
+def _letter_freq(words: List[str]) -> Dict[str, int]:
+    freq = {}
+    for w in words:
+        for ch in set(w):
+            freq[ch] = freq.get(ch, 0) + 1
+    return freq
+
+
+def get_starter(mode: int) -> str:
+    if mode in _STARTER_CACHE:
+        return _STARTER_CACHE[mode]
+    common, _ = load_words(mode)
+    freq = _letter_freq(common)
+    best_word = common[0]
+    best_score = -1.0
+    for w in common:
+        score = sum(freq.get(ch, 0) for ch in set(w))
+        if score > best_score:
+            best_score = score
+            best_word = w
+    _STARTER_CACHE[mode] = best_word
+    return best_word
+
+
+def get_second(common: List[str], guesses: List[Tuple]) -> str:
+    if not common:
+        return "crane"
+    used_letters = set()
+    for w, _ in guesses:
+        used_letters.update(w)
+    freq = _letter_freq(common)
+    best_word = common[0]
+    best_score = -1.0
+    for w in common:
+        if w in [g[0] for g in guesses]:
+            continue
+        new_letters = set(w) - used_letters
+        score = sum(freq.get(ch, 0) for ch in new_letters)
+        if score > best_score:
+            best_score = score
+            best_word = w
+    return best_word
 
 
 # ═══════════════════════════════════════════════
@@ -35,12 +68,16 @@ def load_words(mode: int) -> Tuple[List[str], List[str]]:
     Returns (common_words, all_words) for the given letter count.
     common_words = likely answers
     all_words    = valid guesses (much larger list)
+    Results are cached in memory after first load.
     """
+    if mode in _WORD_CACHE:
+        return _WORD_CACHE[mode]
     size = {4: "four", 5: "five", 6: "six"}.get(mode, "five")
     with open(os.path.join(BASE, f"common-{size}.json")) as f:
         common = json.load(f)
     with open(os.path.join(BASE, f"all-{size}.json")) as f:
         all_w = json.load(f)
+    _WORD_CACHE[mode] = (common, all_w)
     return common, all_w
 
 
@@ -132,62 +169,50 @@ def entropy_score(guess: str, candidates: List[str]) -> float:
 #  Best Guess Picker
 # ═══════════════════════════════════════════════
 
+DEFAULT_GUESSES = {4: "crane", 5: "crane", 6: "crane"}
+
+
 def best_guess(
     common: List[str],
     all_words: List[str],
     guesses: List[Tuple],
     attempt: int = 0,
 ) -> str:
-    """
-    Pick optimal next word.
-
-    Strategy:
-      attempt 0 → use hardcoded STARTER (fast + pre-optimised)
-      attempt 1 → if candidates still large, use SECOND starter
-      otherwise → entropy-rank remaining candidates, pick best
-                  (prefer candidates over non-candidates)
-    """
     mode = len(common[0]) if common else 5
 
-    # ── Attempt 0: always use the starter ──
     if attempt == 0:
-        return STARTERS.get(mode, "slate")
+        return get_starter(mode)
 
-    # ── Filter remaining candidates ──
     candidates = filter_words(common, guesses)
 
-    # ── No candidates left? Try all_words ──
     if not candidates:
         candidates = filter_words(all_words, guesses)
 
     if not candidates:
-        return STARTERS.get(mode, "slate")
+        starter = get_starter(mode)
+        if starter:
+            return starter
+        return DEFAULT_GUESSES.get(mode, "crane")
 
-    # ── 1 or 2 left: just guess the first one ──
     if len(candidates) <= 2:
         return candidates[0]
 
-    # ── attempt 1 + big pool: sometimes better to use a diversity word ──
     if attempt == 1 and len(candidates) > 20:
-        second = SECOND.get(mode)
+        second = get_second(common, guesses)
         if second and second not in [g[0] for g in guesses]:
             return second
 
-    # ── Entropy ranking ──
-    # Score top candidates (cap at 100 for speed on first few guesses)
     score_pool = candidates[:100]
     best_word = candidates[0]
     best_score = -1.0
 
     for word in score_pool:
         score = entropy_score(word, candidates)
-        # Tiny tiebreak: prefer candidates (could literally be the answer)
         score += 0.05
         if score > best_score:
             best_score = score
             best_word = word
 
-    # Also check a few non-candidate "splitter" words if pool is still large
     if len(candidates) > 10:
         all_pool = all_words[:200]
         for word in all_pool:
@@ -269,4 +294,49 @@ def parse_grid(text: str, mode: int) -> Optional[List[Tuple[str, List[str]]]]:
             results.append((words[0].lower(), pattern))
 
     return results if results else None
+
+
+def best_guesses(
+    common: List[str],
+    all_words: List[str],
+    guesses: List[Tuple],
+    n: int = 5,
+) -> List[str]:
+    """Return top N best guesses by entropy score."""
+    candidates = filter_words(common, guesses)
+    if not candidates:
+        candidates = filter_words(all_words, guesses)
+    if not candidates:
+        return common[:n] if common else ["crane"]
+
+    scored = []
+    pool = candidates[:100]
+    for w in pool:
+        s = entropy_score(w, candidates)
+        scored.append((s + 0.05, w))
+
+    if len(candidates) > 10:
+        for w in all_words[:200]:
+            if w in candidates:
+                continue
+            s = entropy_score(w, candidates)
+            scored.append((s, w))
+
+    scored.sort(key=lambda x: -x[0])
+    return [w for _, w in scored[:n]]
+
+
+def get_word_stats() -> dict:
+    """Return word count stats per mode."""
+    sizes = {4: "four", 5: "five", 6: "six"}
+    result = {}
+    for mode, size in sizes.items():
+        common_path = os.path.join(BASE, f"common-{size}.json")
+        all_path = os.path.join(BASE, f"all-{size}.json")
+        with open(common_path) as f:
+            common = len(json.load(f))
+        with open(all_path) as f:
+            all_w = len(json.load(f))
+        result[mode] = {"common": common, "all": all_w}
+    return result
     
