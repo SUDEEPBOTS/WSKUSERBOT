@@ -327,7 +327,7 @@ def register_user(client: Client, user_id: int):
 
             elif cmd == "blacklist":
                 parts = message.text.split()
-                if len(parts) < 2 or parts[1].lower() not in ("list", "add", "del", "remove"):
+                if len(parts) < 2 or parts[1].lower()又不 in ("list", "add", "del", "remove"):
                     await message.edit(
                         "**Blacklist Manager**\n\n"
                         "├ `.blacklist list` — Show blacklisted words\n"
@@ -482,7 +482,6 @@ def register_user(client: Client, user_id: int):
 
         if "Game started!" in text or "Guess the" in text:
             for (uid, gid), game in list(active_games.items()):
-                # FIXED: Added uid == user_id check to prevent clone intersection on game starts
                 if gid == chat_id and uid == user_id and game and not game.get("guesses_sent"):
                     mode = game.get("mode", 5)
                     starter = get_starter(mode)
@@ -496,7 +495,6 @@ def register_user(client: Client, user_id: int):
             return
 
         for (uid, gid), game in list(active_games.items()):
-            # FIXED: Enforced strict individual clone isolation using uid == user_id
             if gid == chat_id and uid == user_id:
                 found = True
                 LOGGER.info(f"wordseek_handler: found active game for uid={uid}, calling handle_wordseek_response")
@@ -505,38 +503,8 @@ def register_user(client: Client, user_id: int):
                 except Exception as e:
                     LOGGER.error(f"wordseek_handler error: {e}\n{traceback.format_exc()}")
 
-        # FIXED: Added fallback verification to stop overlapping idle clones from capturing running rooms
-        chat_has_any_game = any(gid == chat_id for (uid, gid) in active_games.keys())
-
-        if not found and not chat_has_any_game and any(c in text for c in ("🟥", "🟨", "🟩")):
-            m = re.search(r"(\d)-letter mode", text)
-            if m:
-                mode = int(m.group(1))
-                session_data = await get_user_session(user_id)
-                if session_data:
-                    delay = session_data.get("delay", 3)
-                    common, all_words = load_words(mode)
-                    grid = parse_grid(text, mode)
-                    if grid:
-                        guessed_words = [w for w, _ in grid]
-                        active_games[(user_id, chat_id)] = {
-                            "client": client,
-                            "mode": mode,
-                            "guesses": grid,
-                            "common": common,
-                            "all_words": all_words,
-                            "group_id": chat_id,
-                            "attempts": len(grid),
-                            "guesses_sent": guessed_words[:],
-                            "delay": delay,
-                            "last_solved_word": None,
-                            "remaining": len(filter_words(common, grid)),
-                        }
-                        next_word = best_guess(common, all_words, grid, attempt=len(grid))
-                        if next_word and next_word not in guessed_words:
-                            await asyncio.sleep(2)
-                            await client.send_message(chat_id, next_word)
-                            active_games[(user_id, chat_id)]["guesses_sent"].append(next_word)
+        # FIXED: Pure uninvited groups hijacking block ko yahan se delete kar diya gaya hai.
+        # Ab ye tabhi khelega jab aap is specific group mein khud se 'Hupp' bologe!
 
     # Group 2: WordSeekBot ke naye messages read karne ke liye
     @client.on_message(filters.all, group=2)
@@ -552,7 +520,6 @@ def register_user(client: Client, user_id: int):
         if username.lower() != target_bot:
             return
             
-        # FIXED: Prevented surrogate cuts via splitlines wrapper logging
         first_line = message.text.splitlines()[0] if message.text else ""
         LOGGER.info(f"[wordseek_listener] @{username} chat={message.chat.id}: {first_line}")
         await _handle_wordseek_msg(message.chat.id, message.text or "")
@@ -571,7 +538,6 @@ def register_user(client: Client, user_id: int):
         if username.lower() != target_bot:
             return
             
-        # FIXED: Prevented surrogate cuts via splitlines wrapper logging
         first_line = message.text.splitlines()[0] if message.text else ""
         LOGGER.info(f"[wordseek_edited_listener] @{username} chat={message.chat.id}: {first_line}")
         await _handle_wordseek_msg(message.chat.id, message.text or "")
