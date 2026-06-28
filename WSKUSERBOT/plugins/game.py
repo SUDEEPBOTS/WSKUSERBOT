@@ -80,13 +80,22 @@ async def handle_wordseek_response(client: Client, user_id: int, group_id: int, 
         LOGGER.info(f"[handle] uid={user_id} group={group_id} — no active game, ignoring")
         return
 
+    # Guard: skip empty or malformed responses (fixes #2)
+    if not message_text or not message_text.strip():
+        LOGGER.warning(f"[handle] uid={user_id} group={group_id} — empty response from WordSeek, skipping")
+        return
+
     game = active_games[key]
     mode = game["mode"]
     delay = game.get("delay", 3)
     common = game.get("common", [])
     all_words = game.get("all_words", common)
 
-    first_line = message_text.splitlines()[0] if message_text else ""
+    try:
+        first_line = message_text.splitlines()[0] if message_text else ""
+    except (IndexError, AttributeError):
+        LOGGER.warning(f"[handle] uid={user_id} — malformed response, skipping")
+        return
     LOGGER.info(f"[handle] uid={user_id} msg: {first_line}")
 
     # WordSeek ne game confirm kiya — ab starter bhejo
