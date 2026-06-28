@@ -28,6 +28,7 @@ candidates most evenly → wins in fewest attempts.
 import json
 import os
 import math
+from functools import lru_cache
 from typing import List, Tuple, Dict, Optional
 
 BASE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Words")
@@ -112,6 +113,7 @@ def load_candidates(mode: int) -> List[str]:
 #  Pattern Engine  (handles duplicate letters correctly)
 # ═══════════════════════════════════════════════
 
+@lru_cache(maxsize=50000)
 def get_pattern(guess: str, answer: str) -> Tuple[str, ...]:
     """
     Simulate what pattern WordSeek would show for guess vs answer.
