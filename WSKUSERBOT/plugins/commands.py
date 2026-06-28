@@ -288,6 +288,21 @@ def register(client: Client):
                 lines.append(f"`{mode}-letter` — Common: `{c}` | All: `{a}` | Unique: `{unique}`")
             await message.reply("\n".join(lines))
 
+        elif cmd == "lb":
+            from WSKUSERBOT.Mangodb.Database import get_top_players
+            top_players = await get_top_players(10)
+            if not top_players:
+                await message.reply("**Leaderboard is empty!**")
+                return
+            lines = ["🏆 **Global Leaderboard** 🏆\n"]
+            for i, p in enumerate(top_players, 1):
+                wins = p.get("wins", 0)
+                streak = p.get("streak", 0)
+                uid_str = str(p.get("user_id", "Unknown"))
+                uid_masked = uid_str[:4] + "****" + uid_str[-2:] if len(uid_str) > 6 else uid_str
+                lines.append(f"`{i}.` **User {uid_masked}** — Wins: `{wins}` | Streak: `{streak}`🔥")
+            await message.reply("\n".join(lines))
+
         elif cmd == "export":
             stats = await get_stats(user_id)
             if not stats:
