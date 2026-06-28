@@ -30,6 +30,7 @@ users_col = db["users"]
 sessions_col = db["sessions"]
 stats_col = db["stats"]
 blacklist_col = db["blacklist"]
+leaderboard_col = db["leaderboard"]  # Global ranking system (ref #3)
 
 
 async def add_user_session(user_id: int, session: str, mode: int = 5, delay: int = 3) -> None:
